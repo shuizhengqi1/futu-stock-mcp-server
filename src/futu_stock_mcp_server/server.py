@@ -8,15 +8,18 @@ from loguru import logger
 import os
 import sys
 from dotenv import load_dotenv
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP, Context
 from mcp.types import TextContent, PromptMessage
 from mcp.server import Server
+from mcp.server.session import ServerSession
 import atexit
 import signal
 import fcntl
 import psutil
 import time
 from datetime import datetime
+import logging
+import warnings
 
 # Get the project root directory and add it to Python path
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -26,37 +29,104 @@ sys.path.insert(0, project_root)
 env_path = os.path.join(project_root, '.env')
 load_dotenv(env_path)
 
-# Configure logging
-logger.remove()  # Remove default handler
+# CRITICAL: Configure logging to be MCP-compatible
+# According to MCP best practices, we should:
+# 1. Never write to stdout (reserved for MCP JSON communication)
+# 2. Use file logging for debugging
+# 3. Use MCP Context for operational logging when available
+# 4. Suppress third-party library logs that might pollute output
+
+# Completely silence warnings and third-party logs
+warnings.filterwarnings("ignore")
+
+# Configure loguru for file-only logging
+logger.remove()  # Remove all default handlers
 
 # Get the project root directory
 log_dir = os.path.join(project_root, "logs")
 os.makedirs(log_dir, exist_ok=True)
 
-# Add file handler
+# Add file handler only - NO console output to avoid MCP communication interference
 logger.add(
     os.path.join(log_dir, "futu_server.log"),
     rotation="500 MB",
     retention="10 days",
     level="DEBUG",
-    format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}"
+    format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {name} | {message}",
+    enqueue=True,  # Thread-safe logging
+    backtrace=True,
+    diagnose=True
 )
 
-# Add console handler - output to stderr to avoid polluting MCP JSON communication
-logger.add(
-    sys.stderr,
-    level="INFO",
-    format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
-    colorize=False  # Disable colors to avoid ANSI escape sequences
-)
+# Only add stderr logging if explicitly in debug mode and not in MCP mode
+if os.getenv('FUTU_DEBUG_MODE') == '1' and not os.getenv('MCP_MODE'):
+    logger.add(
+        sys.stderr,
+        level="INFO",
+        format="{time:HH:mm:ss} | {level} | {message}",
+        colorize=False,
+        filter=lambda record: record["level"].name in ["INFO", "WARNING", "ERROR", "CRITICAL"]
+    )
 
-# Suppress other library logs that might interfere with MCP communication
-import logging
-logging.getLogger().setLevel(logging.WARNING)  # Suppress INFO logs from other libraries
-logging.getLogger("mcp").setLevel(logging.WARNING)  # Suppress MCP internal logs
-logging.getLogger("futu").setLevel(logging.WARNING)  # Suppress Futu API logs
+# Suppress all third-party library logging to prevent stdout pollution
+logging.disable(logging.CRITICAL)
 
-logger.info(f"Starting server with log directory: {log_dir}")
+# Set up null handlers for problematic loggers
+class NullHandler(logging.Handler):
+    def emit(self, record):
+        pass
+
+null_handler = NullHandler()
+root_logger = logging.getLogger()
+root_logger.addHandler(null_handler)
+root_logger.setLevel(logging.CRITICAL + 1)
+
+# Specifically silence known problematic loggers
+for logger_name in [
+    'mcp', 'fastmcp', 'futu', 'uvicorn', 'asyncio',
+    'websockets', 'aiohttp', 'urllib3', 'requests'
+]:
+    lib_logger = logging.getLogger(logger_name)
+    lib_logger.disabled = True
+    lib_logger.addHandler(null_handler)
+    lib_logger.setLevel(logging.CRITICAL + 1)
+    lib_logger.propagate = False
+
+# MCP-compatible logging helper functions
+async def log_to_mcp(ctx: Context, level: str, message: str):
+    """Send log message through MCP Context when available"""
+    try:
+        if level.upper() == "DEBUG":
+            await ctx.debug(message)
+        elif level.upper() == "INFO":
+            await ctx.info(message)
+        elif level.upper() == "WARNING":
+            await ctx.warning(message)
+        elif level.upper() == "ERROR":
+            await ctx.error(message)
+        else:
+            await ctx.info(f"[{level}] {message}")
+    except Exception:
+        # Fallback to file logging if MCP context fails
+        logger.log(level.upper(), message)
+
+def safe_log(level: str, message: str, ctx: Context = None):
+    """Safe logging that uses MCP context when available, file logging otherwise"""
+    # Always log to file
+    logger.log(level.upper(), message)
+
+    # Also send to MCP if context is available
+    if ctx:
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.create_task(log_to_mcp(ctx, level, message))
+        except Exception:
+            pass  # Ignore MCP logging errors
+
+logger.info(f"Starting Futu MCP Server with log directory: {log_dir}")
+logger.info("Logging configured for MCP compatibility - stdout reserved for JSON communication")
 
 # PID file path
 PID_FILE = os.path.join(project_root, '.futu_mcp.pid')
@@ -411,7 +481,7 @@ def handle_return_data(ret: int, data: Any) -> Dict[str, Any]:
 
 # Market Data Tools
 @mcp.tool()
-async def get_stock_quote(symbols: List[str]) -> Dict[str, Any]:
+async def get_stock_quote(symbols: List[str], ctx: Context[ServerSession, None] = None) -> Dict[str, Any]:
     """Get stock quote data for given symbols
     
     Args:
@@ -455,21 +525,32 @@ async def get_stock_quote(symbols: List[str]) -> Dict[str, Any]:
         - Consider actual needs when selecting stocks
         - Handle exceptions properly
     """
-    ret, data = quote_ctx.get_stock_quote(symbols)
-    if ret != RET_OK:
-        return {'error': str(data)}
+    safe_log("info", f"Getting stock quotes for symbols: {symbols}", ctx)
     
-    # Convert DataFrame to dict if necessary
-    if hasattr(data, 'to_dict'):
-        result = {
-            'quote_list': data.to_dict('records')
-        }
-    else:
-        result = {
-            'quote_list': data
-        }
+    try:
+        ret, data = quote_ctx.get_stock_quote(symbols)
+        if ret != RET_OK:
+            error_msg = f"Failed to get stock quote: {str(data)}"
+            safe_log("error", error_msg, ctx)
+            return {'error': error_msg}
     
-    return result
+        # Convert DataFrame to dict if necessary
+        if hasattr(data, 'to_dict'):
+            result = {
+                'quote_list': data.to_dict('records')
+            }
+        else:
+            result = {
+                'quote_list': data
+            }
+
+        safe_log("info", f"Successfully retrieved quotes for {len(symbols)} symbols", ctx)
+        return result
+
+    except Exception as e:
+        error_msg = f"Exception in get_stock_quote: {str(e)}"
+        safe_log("error", error_msg, ctx)
+        return {'error': error_msg}
 
 @mcp.tool()
 async def get_market_snapshot(symbols: List[str]) -> Dict[str, Any]:
@@ -1126,12 +1207,29 @@ async def get_option_butterfly(symbol: str, expiry: str, strike_price: float) ->
 
 # Account Query Tools
 @mcp.tool()
-async def get_account_list() -> Dict[str, Any]:
+async def get_account_list(ctx: Context[ServerSession, None] = None) -> Dict[str, Any]:
     """Get account list"""
+    safe_log("info", "Attempting to get account list", ctx)
+
     if not init_trade_connection():
-        return {'error': 'Failed to initialize trade connection'}
-    ret, data = trade_ctx.get_acc_list()
-    return handle_return_data(ret, data)
+        error_msg = 'Failed to initialize trade connection'
+        safe_log("error", error_msg, ctx)
+        return {'error': error_msg}
+
+    try:
+        ret, data = trade_ctx.get_acc_list()
+        result = handle_return_data(ret, data)
+
+        if 'error' not in result:
+            safe_log("info", "Successfully retrieved account list", ctx)
+        else:
+            safe_log("error", f"Failed to get account list: {result['error']}", ctx)
+
+        return result
+    except Exception as e:
+        error_msg = f"Exception in get_account_list: {str(e)}"
+        safe_log("error", error_msg, ctx)
+        return {'error': error_msg}
 
 @mcp.tool()
 async def get_funds() -> Dict[str, Any]:
@@ -1457,43 +1555,61 @@ async def get_current_time() -> Dict[str, Any]:
 def main():
     """Main entry point for the futu-mcp-server command."""
     try:
-        # Ensure no color output in MCP mode
+        # CRITICAL: Set MCP mode BEFORE any logging to ensure clean stdout
+        os.environ['MCP_MODE'] = '1'
+
+        # Ensure no color output or ANSI escape sequences in MCP mode
         os.environ['NO_COLOR'] = '1'
         os.environ['TERM'] = 'dumb'
+        os.environ['FORCE_COLOR'] = '0'
+        os.environ['COLORTERM'] = ''
+        os.environ['ANSI_COLORS_DISABLED'] = '1'
 
-        # 清理旧的进程和文件
+        # Disable Python buffering to ensure clean MCP JSON communication
+        os.environ['PYTHONUNBUFFERED'] = '1'
+        os.environ['PYTHONIOENCODING'] = 'utf-8'
+
+        # According to MCP best practices:
+        # - stdout is RESERVED for MCP JSON communication only
+        # - All logging should go to files
+        # - No stderr output in production mode to avoid pollution
+
+        # Clean up stale processes and acquire lock
         cleanup_stale_processes()
         
-        # 获取锁
         lock_fd = acquire_lock()
         if lock_fd is None:
+            # Use file logging only - no stderr output in MCP mode
             logger.error("Failed to acquire lock. Another instance may be running.")
             sys.exit(1)
             
-        # 设置信号处理
+        # Set up signal handlers
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
             
-        logger.info("Initializing Futu connection...")
+        # Initialize Futu connection with file logging only
+        logger.info("Initializing Futu connection for MCP server...")
         if init_futu_connection():
             logger.info("Successfully initialized Futu connection")
-            logger.info("Starting MCP server in stdio mode...")
-            logger.info("Press Ctrl+C to stop the server")
+            logger.info("Starting MCP server in stdio mode - stdout reserved for JSON communication")
+
             try:
+                # Run MCP server - stdout will be used for JSON communication only
                 mcp.run(transport='stdio')
             except KeyboardInterrupt:
-                logger.info("Received keyboard interrupt, shutting down...")
+                logger.info("Received keyboard interrupt, shutting down gracefully...")
                 cleanup_all()
                 os._exit(0)
             except Exception as e:
-                logger.error(f"Error running server: {str(e)}")
+                logger.error(f"Error running MCP server: {str(e)}")
                 cleanup_all()
                 os._exit(1)
         else:
-            logger.error("Failed to initialize Futu connection. Server will not start.")
+            logger.error("Failed to initialize Futu connection. MCP server will not start.")
             os._exit(1)
+
     except Exception as e:
-        logger.error(f"Error starting server: {str(e)}")
+        logger.error(f"Error starting MCP server: {str(e)}")
         sys.exit(1)
     finally:
         cleanup_all() 

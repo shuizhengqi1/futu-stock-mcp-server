@@ -357,13 +357,29 @@ python -m futu_stock_mcp_server.server
 ```
 
 ### 日志调试
-启用详细日志：
+
+本项目已根据 [MCP 官方文档](https://github.com/modelcontextprotocol/python-sdk) 的最佳实践配置了日志系统：
+
+#### MCP 兼容的日志配置
+- **文件日志**: 所有日志写入 `logs/futu_server.log`，自动轮转和清理
+- **MCP Context 日志**: 工具执行期间通过 MCP Context 发送日志给客户端
+- **stdout 保护**: 确保 stdout 仅用于 MCP JSON 通信，避免污染
+
+#### 调试模式（仅开发时使用）
 ```bash
-export LOG_LEVEL=DEBUG
+# 启用调试模式（会向 stderr 输出日志）
+export FUTU_DEBUG_MODE=1
 futu-mcp-server
 ```
 
-日志文件位置：`./logs/futu_server.log`
+**注意**: 在 MCP 客户端中不要启用调试模式，因为它会向 stderr 输出日志。
+
+#### 日志文件位置
+- 主日志文件：`./logs/futu_server.log`
+- 自动轮转：500 MB 后轮转
+- 自动清理：保留 10 天
+
+详细的日志配置说明请参考 [docs/LOGGING.md](docs/LOGGING.md)。
             tools = await session.list_tools()
 
             # Call a tool

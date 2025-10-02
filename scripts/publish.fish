@@ -3,7 +3,13 @@
 # Futu Stock MCP Server PyPI 发布脚本 (Fish Shell)
 # 自动切换虚拟环境，构建并发布到PyPI
 
-set -e
+# Fish shell 中的错误处理
+function exit_on_error
+    if test $status -ne 0
+        echo "❌ 命令执行失败，退出"
+        exit 1
+    end
+end
 
 echo "📦 开始发布 Futu Stock MCP Server 到 PyPI..."
 
@@ -30,6 +36,7 @@ set venv_path "$project_root/.venv"
 if not test -d $venv_path
     echo "🔧 创建虚拟环境..."
     uv venv
+    exit_on_error
 end
 
 # 激活虚拟环境 (Fish shell 方式)
@@ -47,27 +54,59 @@ echo "✅ 虚拟环境已激活: $VIRTUAL_ENV"
 # 安装项目依赖
 echo "📥 安装项目依赖..."
 uv pip install -e .
+exit_on_error
 
 # 安装发布工具
 echo "🔧 安装发布工具..."
 uv pip install build twine
+exit_on_error
 
 # 清理旧的构建文件
 echo "🧹 清理旧的构建文件..."
-rm -rf dist/ build/ *.egg-info/
+if test -d dist
+    rm -rf dist/
+end
+if test -d build
+    rm -rf build/
+end
+# 清理 egg-info 目录（使用 find 命令避免通配符问题）
+find . -name "*.egg-info" -type d -exec rm -rf {} + 2>/dev/null || true
 mkdir -p dist/
 
-# 读取当前版本
-set current_version (python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+# 读取当前版本（兼容 Python 3.10 及以下版本）
+set current_version (python -c "
+import sys
+if sys.version_info >= (3, 11):
+    import tomllib
+    with open('pyproject.toml', 'rb') as f:
+        data = tomllib.load(f)
+else:
+    # 对于 Python 3.10 及以下版本，使用简单的文本解析
+    import re
+    with open('pyproject.toml', 'r') as f:
+        content = f.read()
+    match = re.search(r'version\s*=\s*[\"\'](.*?)[\"\']', content)
+    if match:
+        print(match.group(1))
+    else:
+        print('unknown')
+        exit(1)
+    exit(0)
+print(data['project']['version'])
+")
+exit_on_error
+
 echo "📋 当前版本: v$current_version"
 
 # 构建包
 echo "🔨 构建包..."
 python -m build
+exit_on_error
 
 # 检查包
 echo "🔍 检查包..."
 python -m twine check dist/*
+exit_on_error
 
 # 列出构建的文件
 echo "📦 构建的文件:"
@@ -88,9 +127,11 @@ switch $confirm
             echo "💡 或者在 ~/.pypirc 中配置认证信息"
         end
 
-        python -m twine upload dist/futu_stock_mcp_server-$current_version*
+        # 使用通配符上传所有构建的文件
+        python -m twine upload dist/*
+        set upload_status $status
 
-        if test $status -eq 0
+        if test $upload_status -eq 0
             echo "✅ 发布成功！"
             echo "🔗 查看包: https://pypi.org/project/futu-stock-mcp-server/$current_version/"
 
@@ -130,6 +171,9 @@ switch $cleanup_confirm
     case y Y
         echo ""
         echo "🧹 清理构建文件..."
-        rm -rf build/ *.egg-info/
+        if test -d build
+            rm -rf build/
+        end
+        find . -name "*.egg-info" -type d -exec rm -rf {} + 2>/dev/null || true
         echo "✅ 清理完成"
 end

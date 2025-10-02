@@ -1,94 +1,47 @@
 # 发布脚本使用说明
 
-本目录包含用于构建和发布 Futu Stock MCP Server 到 PyPI 的脚本。
+本目录包含用于发布 Futu Stock MCP Server 到 PyPI 的自动化脚本。
 
-## 脚本列表
+## 可用脚本
 
-### 1. `publish.fish` - Fish Shell 发布脚本
-适用于使用 Fish Shell 的用户。
+### 1. publish.sh (推荐)
+Bash 版本的发布脚本，兼容性最好。
 
-**特性：**
-- 自动检测和创建虚拟环境
-- 自动激活虚拟环境（Fish Shell 方式）
-- 自动安装依赖和构建工具
-- 交互式发布流程
-- 自动创建和推送 Git tags
-- 可选的构建文件清理
-
-**使用方法：**
-```fish
-# 确保你在项目根目录
-cd /path/to/futu-stock-mcp-server
-
-# 运行发布脚本
-./scripts/publish.fish
-```
-
-### 2. `publish.sh` - Bash 发布脚本
-适用于使用 Bash/Zsh 等传统 shell 的用户。
-
-**特性：**
-- 与 Fish 版本功能相同
-- 使用 Bash 语法和虚拟环境激活方式
-
-**使用方法：**
 ```bash
-# 确保你在项目根目录
-cd /path/to/futu-stock-mcp-server
-
 # 运行发布脚本
 ./scripts/publish.sh
 ```
 
-## 发布流程
+### 2. publish.fish
+Fish shell 版本的发布脚本。
 
-两个脚本都会执行以下步骤：
+```fish
+# 运行发布脚本 (需要 Fish shell)
+./scripts/publish.fish
+```
 
-1. **环境检查**
-   - 检查 `uv` 和 `python` 是否安装
-   - 获取项目根目录路径
+## 使用前准备
 
-2. **虚拟环境管理**
-   - 检查 `.venv` 目录是否存在
-   - 如果不存在，自动创建虚拟环境
-   - 激活虚拟环境
+### 1. 安装必要工具
+```bash
+# 安装 uv (Python 包管理器)
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
-3. **依赖安装**
-   - 安装项目依赖 (`uv pip install -e .`)
-   - 安装构建工具 (`build`, `twine`)
+# 安装 Python 3.10+
+# macOS: brew install python
+# Ubuntu: apt install python3
+```
 
-4. **构建准备**
-   - 清理旧的构建文件
-   - 读取当前版本号
-   - 构建包 (`python -m build`)
-   - 检查包的完整性
+### 2. 配置 PyPI 认证
 
-5. **发布确认**
-   - 显示构建的文件列表
-   - 询问是否发布到 PyPI
-   - 检查 PyPI 认证配置
-
-6. **发布和标签**
-   - 上传到 PyPI
-   - 可选：创建 Git tag
-   - 可选：推送 tag 到远程仓库
-
-7. **清理**
-   - 可选：清理构建文件
-
-## 环境配置
-
-### PyPI 认证
-
-推荐使用以下方式之一配置 PyPI 认证：
-
-#### 方式1：环境变量
+#### 方法 1: 环境变量 (推荐)
 ```bash
 export TWINE_USERNAME=__token__
 export TWINE_PASSWORD=pypi-your-api-token-here
 ```
 
-#### 方式2：配置文件 `~/.pypirc`
+#### 方法 2: 配置文件
+创建 `~/.pypirc` 文件：
 ```ini
 [distutils]
 index-servers = pypi
@@ -98,50 +51,66 @@ username = __token__
 password = pypi-your-api-token-here
 ```
 
-### 必要工具
+## 发布流程
 
-确保安装了以下工具：
+脚本会自动执行以下步骤：
 
-```bash
-# 安装 uv
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# 或者使用 pip
-pip install uv
-```
+1. **环境检查**: 验证 uv 和 Python 是否安装
+2. **虚拟环境**: 创建/激活项目虚拟环境
+3. **依赖安装**: 安装项目依赖和发布工具
+4. **清理**: 删除旧的构建文件
+5. **版本读取**: 从 pyproject.toml 读取当前版本
+6. **构建**: 使用 `python -m build` 构建包
+7. **检查**: 使用 `twine check` 验证包
+8. **发布**: 询问确认后上传到 PyPI
+9. **标签**: 可选创建 git tag 并推送
 
 ## 版本管理
 
-发布前请确保：
+在发布前，请确保：
 
 1. 更新 `pyproject.toml` 中的版本号
 2. 更新 `CHANGELOG.md` 记录变更
-3. 提交所有更改到 Git
+3. 提交所有更改到 git
 
 ## 故障排除
 
-### 常见问题
+### 问题 1: uv 命令未找到
+```bash
+# 重新安装 uv
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source ~/.bashrc  # 或 ~/.zshrc
+```
 
-1. **虚拟环境激活失败**
-   - 检查 `.venv` 目录权限
-   - 手动删除 `.venv` 目录重新创建
+### 问题 2: Python 版本不兼容
+```bash
+# 检查 Python 版本
+python --version
+# 需要 Python 3.10 或更高版本
+```
 
-2. **PyPI 上传失败**
-   - 检查网络连接
-   - 验证 PyPI 认证信息
-   - 确保版本号未被使用
+### 问题 3: PyPI 认证失败
+```bash
+# 检查 token 是否正确设置
+echo $TWINE_PASSWORD
+# 或检查 ~/.pypirc 文件
+```
 
-3. **构建失败**
-   - 检查 `pyproject.toml` 语法
-   - 确保所有依赖都已安装
+### 问题 4: 包已存在
+如果版本号已经发布过，需要：
+1. 更新 `pyproject.toml` 中的版本号
+2. 重新运行发布脚本
 
-### 调试模式
+## 手动发布
 
-如需调试，可以手动执行各个步骤：
+如果脚本失败，可以手动执行：
 
 ```bash
 # 激活虚拟环境
 source .venv/bin/activate
+
+# 安装工具
+pip install build twine
 
 # 构建
 python -m build
@@ -149,13 +118,6 @@ python -m build
 # 检查
 python -m twine check dist/*
 
-# 上传（测试）
-python -m twine upload --repository testpypi dist/*
+# 上传
+python -m twine upload dist/*
 ```
-
-## 注意事项
-
-- 发布到 PyPI 的版本号不能重复使用
-- 建议先在 TestPyPI 上测试发布流程
-- 确保在发布前运行所有测试
-- 发布后的包无法删除，只能发布新版本

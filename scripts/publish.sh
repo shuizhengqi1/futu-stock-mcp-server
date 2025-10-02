@@ -3,13 +3,20 @@
 # Futu Stock MCP Server PyPI 发布脚本 (Bash)
 # 自动切换虚拟环境，构建并发布到PyPI
 
-set -e
+set -e  # 遇到错误立即退出
 
 echo "📦 开始发布 Futu Stock MCP Server 到 PyPI..."
 
 # 检查必要的工具
-command -v uv >/dev/null 2>&1 || { echo "❌ uv 未安装，请先安装 uv"; exit 1; }
-command -v python >/dev/null 2>&1 || { echo "❌ Python 未安装"; exit 1; }
+if ! command -v uv &> /dev/null; then
+    echo "❌ uv 未安装，请先安装 uv"
+    exit 1
+fi
+
+if ! command -v python &> /dev/null; then
+    echo "❌ Python 未安装"
+    exit 1
+fi
 
 # 获取项目根目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -26,12 +33,12 @@ if [ ! -d "$VENV_PATH" ]; then
     uv venv
 fi
 
-# 激活虚拟环境 (Bash 方式)
+# 激活虚拟环境
 echo "🔄 激活虚拟环境..."
 source "$VENV_PATH/bin/activate"
 
 # 验证虚拟环境
-if [[ "$VIRTUAL_ENV" == "" ]]; then
+if [ -z "$VIRTUAL_ENV" ]; then
     echo "❌ 虚拟环境激活失败"
     exit 1
 fi
@@ -48,11 +55,31 @@ uv pip install build twine
 
 # 清理旧的构建文件
 echo "🧹 清理旧的构建文件..."
-rm -rf dist/ build/ *.egg-info/
+rm -rf dist/ build/
+find . -name "*.egg-info" -type d -exec rm -rf {} + 2>/dev/null || true
 mkdir -p dist/
 
-# 读取当前版本
-CURRENT_VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+# 读取当前版本（兼容 Python 3.10 及以下版本）
+CURRENT_VERSION=$(python -c "
+import sys
+if sys.version_info >= (3, 11):
+    import tomllib
+    with open('pyproject.toml', 'rb') as f:
+        data = tomllib.load(f)
+    print(data['project']['version'])
+else:
+    # 对于 Python 3.10 及以下版本，使用简单的文本解析
+    import re
+    with open('pyproject.toml', 'r') as f:
+        content = f.read()
+    match = re.search(r'version\s*=\s*[\"\'](.*?)[\"\']', content)
+    if match:
+        print(match.group(1))
+    else:
+        print('unknown')
+        exit(1)
+")
+
 echo "📋 当前版本: v$CURRENT_VERSION"
 
 # 构建包
@@ -76,12 +103,13 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
     echo "🚀 发布到 PyPI..."
 
     # 检查是否有 PyPI token
-    if [[ -z "$TWINE_PASSWORD" ]]; then
+    if [ -z "$TWINE_PASSWORD" ]; then
         echo "⚠️  建议设置 TWINE_PASSWORD 环境变量"
         echo "💡 或者在 ~/.pypirc 中配置认证信息"
     fi
 
-    python -m twine upload dist/futu_stock_mcp_server-$CURRENT_VERSION*
+    # 上传到 PyPI
+    python -m twine upload dist/*
 
     if [ $? -eq 0 ]; then
         echo "✅ 发布成功！"
@@ -119,6 +147,7 @@ read -p "是否清理构建文件? (y/N): " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
     echo "🧹 清理构建文件..."
-    rm -rf build/ *.egg-info/
+    rm -rf build/
+    find . -name "*.egg-info" -type d -exec rm -rf {} + 2>/dev/null || true
     echo "✅ 清理完成"
 fi
