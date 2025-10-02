@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/shuizhengqi1-futu-stocp-mcp-server-badge.png)](https://mseep.ai/app/shuizhengqi1-futu-stocp-mcp-server)
+
 # Futu Stock MCP Server
 
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org)
