@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  futu-mcp-server:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - FUTU_HOST=${FUTU_HOST:-127.0.0.1}
+      - FUTU_PORT=${FUTU_PORT:-11111}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+      - ./config:/app/config
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # 可选：添加 nginx 反向代理
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - futu-mcp-server
+    restart: unless-stopped
+    profiles:
+      - production

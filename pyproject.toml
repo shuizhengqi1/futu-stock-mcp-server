@@ -1,7 +1,28 @@
 [project]
 name = "futu-stock-mcp-server"
-version = "0.1.0"
+version = "0.1.1"
 description = "A Model Context Protocol (MCP) server for accessing Futu OpenAPI functionality"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "shuizhengqi", email = "shuizhengqi1@163.com"}
+]
+maintainers = [
+    {name = "shuizhengqi", email = "shuizhengqi1@163.com"}
+]
+keywords = ["mcp", "futu", "stock", "trading", "api", "finance"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
 requires-python = ">=3.10"
 dependencies = [
     "futu-api",
@@ -16,12 +37,37 @@ dependencies = [
     "psutil"
 ]
 
+[project.urls]
+Homepage = "https://github.com/shuizhengqi1/futu-stock-mcp-server"
+Documentation = "https://github.com/shuizhengqi1/futu-stock-mcp-server#readme"
+Repository = "https://github.com/shuizhengqi1/futu-stock-mcp-server"
+Issues = "https://github.com/shuizhengqi1/futu-stock-mcp-server/issues"
+
+[project.scripts]
+futu-mcp-server = "futu_stock_mcp_server.server:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "black",
+    "ruff",
+    "mypy",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/futu_stock_mcp_server"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/README.md",
+    "/LICENSE",
+]
 
 [tool.ruff]
 line-length = 100

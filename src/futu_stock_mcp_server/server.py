@@ -167,15 +167,24 @@ def signal_handler(signum, frame):
     """Handle process signals"""
     global _is_shutting_down
     if _is_shutting_down:
-        return
+        logger.info("Already shutting down, forcing exit...")
+        os._exit(1)
         
     # 只处理 SIGINT 和 SIGTERM
     if signum not in (signal.SIGINT, signal.SIGTERM):
         return
         
     logger.info(f"Received signal {signum}, cleaning up...")
-    cleanup_all()
-    sys.exit(0)
+    _is_shutting_down = True
+
+    try:
+        cleanup_all()
+        logger.info("Cleanup completed, exiting...")
+    except Exception as e:
+        logger.error(f"Error during cleanup: {e}")
+    finally:
+        # 强制退出，确保进程能够终止
+        os._exit(0)
 
 # Register cleanup functions
 atexit.register(cleanup_all)
@@ -1438,7 +1447,8 @@ async def get_current_time() -> Dict[str, Any]:
         'timezone': datetime.now().astimezone().tzname()
     }
 
-if __name__ == "__main__":
+def main():
+    """Main entry point for the futu-mcp-server command."""
     try:
         # 清理旧的进程和文件
         cleanup_stale_processes()
@@ -1457,19 +1467,25 @@ if __name__ == "__main__":
         if init_futu_connection():
             logger.info("Successfully initialized Futu connection")
             logger.info("Starting MCP server in stdio mode...")
+            logger.info("Press Ctrl+C to stop the server")
             try:
                 mcp.run(transport='stdio')
             except KeyboardInterrupt:
                 logger.info("Received keyboard interrupt, shutting down...")
-                sys.exit(0)
+                cleanup_all()
+                os._exit(0)
             except Exception as e:
                 logger.error(f"Error running server: {str(e)}")
-                sys.exit(1)
+                cleanup_all()
+                os._exit(1)
         else:
             logger.error("Failed to initialize Futu connection. Server will not start.")
-            sys.exit(1)
+            os._exit(1)
     except Exception as e:
         logger.error(f"Error starting server: {str(e)}")
         sys.exit(1)
     finally:
         cleanup_all() 
+
+if __name__ == "__main__":
+    main()

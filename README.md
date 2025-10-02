@@ -57,7 +57,43 @@
 - Model Context Protocol SDK
 - uv (recommended)
 
-## Installation
+## 🚀 快速开始
+
+### 方式一：通过 pipx 安装（推荐）
+
+```bash
+# 安装 pipx（如果还没有安装）
+brew install pipx  # macOS
+# 或者 pip install --user pipx  # 其他系统
+
+# 安装包
+pipx install futu-stock-mcp-server
+
+# 运行服务器
+futu-mcp-server
+```
+
+> **为什么使用 pipx？**
+> - pipx 专门用于安装 Python 应用程序到全局环境
+> - 自动管理独立的虚拟环境，避免依赖冲突
+> - 命令直接可用，无需激活虚拟环境
+
+### 方式二：通过 Docker 运行
+
+```bash
+# 拉取镜像
+docker pull your-registry/futu-stock-mcp-server:latest
+
+# 运行容器
+docker run -d \
+  --name futu-mcp-server \
+  -p 8000:8000 \
+  -e FUTU_HOST=127.0.0.1 \
+  -e FUTU_PORT=11111 \
+  your-registry/futu-stock-mcp-server:latest
+```
+
+### 方式三：从源码安装
 
 1. Clone the repository:
 ```bash
@@ -147,22 +183,61 @@ Run formatting:
 ruff format .
 ```
 
-## Usage
+## 🔧 MCP Server 配置
 
-1. Start the server:
-```bash
-python -m futu_stock_mcp_server.server
+### 在 Claude Desktop 中配置
+
+1. **找到配置文件位置**：
+   - **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+   - **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+
+2. **添加服务器配置**：
+```json
+{
+  "mcpServers": {
+    "futu-stock": {
+      "command": "futu-mcp-server",
+      "env": {
+        "FUTU_HOST": "127.0.0.1",
+        "FUTU_PORT": "11111"
+      }
+    }
+  }
+}
 ```
 
-2. Connect to the server using an MCP client:
+3. **故障排除配置**：
+如果上述配置不工作，可以尝试使用完整路径：
+```json
+{
+  "mcpServers": {
+    "futu-stock": {
+      "command": "/Users/your-username/.local/bin/futu-mcp-server",
+      "env": {
+        "FUTU_HOST": "127.0.0.1",
+        "FUTU_PORT": "11111"
+      }
+    }
+  }
+}
+```
+
+> **提示**：使用 `which futu-mcp-server` 命令查看完整路径
+
+### 在其他 MCP 客户端中配置
+
+#### 使用 Python MCP 客户端
 ```python
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 async def main():
     server_params = StdioServerParameters(
-        command="python",
-        args=["src/server.py"]
+        command="futu-mcp-server",
+        env={
+            "FUTU_HOST": "127.0.0.1",
+            "FUTU_PORT": "11111"
+        }
     )
     
     async with stdio_client(server_params) as (read, write):
@@ -172,7 +247,123 @@ async def main():
             
             # List available tools
             tools = await session.list_tools()
+            print("Available tools:", [tool.name for tool in tools.tools])
+```
             
+#### 使用 Node.js MCP 客户端
+```javascript
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+
+const transport = new StdioClientTransport({
+  command: "futu-mcp-server",
+  env: {
+    FUTU_HOST: "127.0.0.1",
+    FUTU_PORT: "11111"
+  }
+});
+
+const client = new Client({
+  name: "futu-stock-client",
+  version: "1.0.0"
+}, {
+  capabilities: {}
+});
+
+await client.connect(transport);
+```
+
+## 📋 使用方法
+
+### 1. 启动服务器（独立运行）
+```bash
+# 通过 pip 安装后
+futu-mcp-server
+
+# 或从源码运行
+python -m futu_stock_mcp_server.server
+```
+
+### 2. 环境变量配置
+创建 `.env` 文件或设置环境变量：
+```bash
+FUTU_HOST=127.0.0.1
+FUTU_PORT=11111
+LOG_LEVEL=INFO
+```
+
+### 3. 验证连接
+启动服务器后，你应该看到类似的日志：
+```
+2024-10-02 14:20:52 | INFO | Initializing Futu connection...
+2024-10-02 14:20:52 | INFO | Successfully initialized Futu connection
+2024-10-02 14:20:52 | INFO | Starting MCP server in stdio mode...
+2024-10-02 14:20:52 | INFO | Press Ctrl+C to stop the server
+```
+
+### 4. 在 AI 工具中使用
+配置完成后，重启 Claude Desktop 或其他 MCP 客户端，你就可以：
+- 查询股票实时行情
+- 获取历史K线数据
+- 订阅股票数据推送
+- 查询账户信息
+- 执行交易操作（需要交易权限）
+
+## 🔧 故障排除
+
+### 常见问题
+
+#### 1. 命令 `futu-mcp-server` 找不到
+```bash
+# 确保已正确安装
+pipx install futu-stock-mcp-server
+
+# 检查命令是否可用
+which futu-mcp-server
+
+# 如果还是找不到，检查 PATH
+echo $PATH | grep -o '[^:]*\.local/bin[^:]*'
+```
+
+#### 2. Ctrl+C 无法退出服务器
+- 新版本已修复此问题
+- 如果仍然遇到，可以使用 `kill -9 <pid>` 强制终止
+
+#### 3. 连接富途 OpenD 失败
+```bash
+# 检查 OpenD 是否运行
+netstat -an | grep 11111
+
+# 检查环境变量
+echo $FUTU_HOST
+echo $FUTU_PORT
+```
+
+#### 4. Claude Desktop 无法识别服务器
+- 确保配置文件路径正确
+- 检查 JSON 格式是否有效
+- 重启 Claude Desktop
+- 查看 Claude Desktop 的日志文件
+
+#### 5. 权限问题
+```bash
+# 确保有执行权限
+chmod +x ~/.local/bin/futu-mcp-server
+
+# 或者使用完整路径
+python -m futu_stock_mcp_server.server
+```
+
+### 日志调试
+启用详细日志：
+```bash
+export LOG_LEVEL=DEBUG
+futu-mcp-server
+```
+
+日志文件位置：`./logs/futu_server.log`
+            tools = await session.list_tools()
+
             # Call a tool
             result = await session.call_tool(
                 "get_stock_quote",
