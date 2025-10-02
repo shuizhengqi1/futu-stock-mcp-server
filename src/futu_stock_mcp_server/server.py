@@ -42,12 +42,19 @@ logger.add(
     format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}"
 )
 
-# Add console handler
+# Add console handler - output to stderr to avoid polluting MCP JSON communication
 logger.add(
-    lambda msg: print(msg),
+    sys.stderr,
     level="INFO",
-    format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}"
+    format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
+    colorize=False  # Disable colors to avoid ANSI escape sequences
 )
+
+# Suppress other library logs that might interfere with MCP communication
+import logging
+logging.getLogger().setLevel(logging.WARNING)  # Suppress INFO logs from other libraries
+logging.getLogger("mcp").setLevel(logging.WARNING)  # Suppress MCP internal logs
+logging.getLogger("futu").setLevel(logging.WARNING)  # Suppress Futu API logs
 
 logger.info(f"Starting server with log directory: {log_dir}")
 
@@ -1450,6 +1457,10 @@ async def get_current_time() -> Dict[str, Any]:
 def main():
     """Main entry point for the futu-mcp-server command."""
     try:
+        # Ensure no color output in MCP mode
+        os.environ['NO_COLOR'] = '1'
+        os.environ['TERM'] = 'dumb'
+
         # 清理旧的进程和文件
         cleanup_stale_processes()
         
