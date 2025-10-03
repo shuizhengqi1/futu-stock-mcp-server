@@ -1,12 +1,88 @@
+import os
+import sys
+import warnings
+import logging
+import argparse
+
+# CRITICAL: Check if this is a help command before setting MCP mode
+_is_help_command = any(arg in ['--help', '-h', '--version', '-v'] for arg in sys.argv)
+
+# CRITICAL: Set MCP mode BEFORE any logging to ensure clean stdout
+# But not if this is a help command - in that case, we want normal stdout
+if not _is_help_command:
+    os.environ['MCP_MODE'] = os.environ.get('MCP_MODE', '1')
+
+# CRITICAL: Completely disable all potential stdout pollution sources
+# This must be done BEFORE any other imports or operations
+
+# 1. Disable all warnings that might go to stdout/stderr
+warnings.filterwarnings("ignore")
+warnings.simplefilter("ignore")
+
+# 2. Completely disable the standard logging system
+logging.disable(logging.CRITICAL)
+
+# 3. Set environment variables to prevent ANSI escape sequences
+os.environ['NO_COLOR'] = '1'
+os.environ['TERM'] = 'dumb'
+os.environ['FORCE_COLOR'] = '0'
+os.environ['COLORTERM'] = ''
+os.environ['ANSI_COLORS_DISABLED'] = '1'
+os.environ['PYTHONUNBUFFERED'] = '1'
+os.environ['PYTHONIOENCODING'] = 'utf-8'
+
+# 4. Create a custom stdout wrapper to catch any accidental writes
+class StdoutProtector:
+    """Protects stdout from any non-MCP content"""
+    def __init__(self, original_stdout):
+        self.original = original_stdout
+        self.buffer = ""
+
+    def write(self, text):
+        # Only allow JSON-like content or empty strings
+        if not text or text.isspace():
+            self.original.write(text)
+        elif text.strip().startswith(('{', '[', '"')) or text.strip() == '':
+            self.original.write(text)
+        else:
+            # Silently drop non-JSON content
+            pass
+
+    def flush(self):
+        self.original.flush()
+
+    def __getattr__(self, name):
+        return getattr(self.original, name)
+
+# Apply stdout protection in MCP mode VERY EARLY, before any imports
+if os.getenv('MCP_MODE') == '1':
+    sys.stdout = StdoutProtector(sys.stdout)
+
+# 5. Redirect stderr to null in MCP mode to prevent any accidental output
+_stderr_redirected = False
+_stderr_backup = None
+if os.getenv('MCP_MODE') == '1':
+    # Save original stderr for emergency use
+    _stderr_backup = sys.stderr
+    # Redirect stderr to devnull
+    devnull = open(os.devnull, 'w')
+    sys.stderr = devnull
+    _stderr_redirected = True
+
+# Now we can safely import other modules
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 from typing import Dict, Any, List, Optional
-from futu import OpenQuoteContext, OpenSecTradeContext, TrdMarket, SecurityFirm, RET_OK
+try:
+    from futu import OpenQuoteContext, OpenSecTradeContext, TrdMarket, SecurityFirm, RET_OK
+except ImportError as e:
+    # In MCP mode, we should avoid printing to stdout/stderr
+    # Log to file only
+    logger.error(f"Failed to import futu: {e}")
+    sys.exit(1)
 import json
 import asyncio
 from loguru import logger
-import os
-import sys
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP, Context
 from mcp.types import TextContent, PromptMessage
@@ -18,16 +94,11 @@ import fcntl
 import psutil
 import time
 from datetime import datetime
-import logging
-import warnings
 
-# Get the project root directory and add it to Python path
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, project_root)
-
-# Load environment variables from project root
-env_path = os.path.join(project_root, '.env')
-load_dotenv(env_path)
+# Get the user home directory and create logs directory there
+home_dir = os.path.expanduser("~")
+log_dir = os.path.join(home_dir, "logs")
+os.makedirs(log_dir, exist_ok=True)
 
 # CRITICAL: Configure logging to be MCP-compatible
 # According to MCP best practices, we should:
@@ -42,24 +113,36 @@ warnings.filterwarnings("ignore")
 # Configure loguru for file-only logging
 logger.remove()  # Remove all default handlers
 
-# Get the project root directory
-log_dir = os.path.join(project_root, "logs")
-os.makedirs(log_dir, exist_ok=True)
-
-# Add file handler only - NO console output to avoid MCP communication interference
-logger.add(
-    os.path.join(log_dir, "futu_server.log"),
-    rotation="500 MB",
-    retention="10 days",
-    level="DEBUG",
-    format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {name} | {message}",
-    enqueue=True,  # Thread-safe logging
-    backtrace=True,
-    diagnose=True
-)
+# CRITICAL: In MCP mode, ensure NO stderr output at all
+if os.getenv('MCP_MODE') == '1':
+    # Remove any remaining handlers that might output to stderr
+    logger.remove()
+    # Add only file handler - NO console output
+    logger.add(
+        os.path.join(log_dir, "futu_mcp_server.log"),
+        rotation="500 MB",
+        retention="10 days",
+        level="DEBUG",
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {name} | {message}",
+        enqueue=True,  # Thread-safe logging
+        backtrace=True,
+        diagnose=True
+    )
+else:
+    # Non-MCP mode: add file handler
+    logger.add(
+        os.path.join(log_dir, "futu_mcp_server.log"),
+        rotation="500 MB",
+        retention="10 days",
+        level="DEBUG",
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {name} | {message}",
+        enqueue=True,  # Thread-safe logging
+        backtrace=True,
+        diagnose=True
+    )
 
 # Only add stderr logging if explicitly in debug mode and not in MCP mode
-if os.getenv('FUTU_DEBUG_MODE') == '1' and not os.getenv('MCP_MODE'):
+if os.getenv('FUTU_DEBUG_MODE') == '1' and not os.getenv('MCP_MODE') == '1':
     logger.add(
         sys.stderr,
         level="INFO",
@@ -92,6 +175,45 @@ for logger_name in [
     lib_logger.setLevel(logging.CRITICAL + 1)
     lib_logger.propagate = False
 
+# Even more aggressive suppression for futu library
+# This is critical because futu library may output logs during connection
+try:
+    # Suppress futu library logging completely
+    futu_logger = logging.getLogger('futu')
+    futu_logger.disabled = True
+    futu_logger.setLevel(logging.CRITICAL + 1)
+    futu_logger.propagate = False
+
+    # Suppress specific futu sub-modules that are known to output logs
+    for sub_logger_name in [
+        'futu', 'futu.common', 'futu.quote', 'futu.trade',
+        'futu.common.constant', 'futu.common.sys_utils',
+        'futu.quote.open_quote_context', 'futu.quote.quote_response_handler',
+        'futu.trade.open_trade_context', 'futu.trade.trade_response_handler',
+        'futu.common.open_context_base', 'futu.common.network_manager'
+    ]:
+        sub_logger = logging.getLogger(sub_logger_name)
+        sub_logger.disabled = True
+        sub_logger.setLevel(logging.CRITICAL + 1)
+        sub_logger.propagate = False
+
+    # Also redirect any direct print statements from futu to a file
+    if os.getenv('MCP_MODE') == '1':
+        # Create a special log file for futu connection logs
+        home_dir = os.path.expanduser("~")
+        log_dir = os.path.join(home_dir, "logs")
+        os.makedirs(log_dir, exist_ok=True)
+
+        futu_conn_log_file = os.path.join(log_dir, "futu_connection.log")
+        futu_conn_log = open(futu_conn_log_file, 'a')
+
+        # This is a last resort to catch any print statements from futu
+        # We'll redirect stderr to this file temporarily during connection
+        # and then restore it to devnull
+except Exception as e:
+    # If we can't set up additional logging, continue anyway
+    pass
+
 # MCP-compatible logging helper functions
 async def log_to_mcp(ctx: Context, level: str, message: str):
     """Send log message through MCP Context when available"""
@@ -116,7 +238,7 @@ def safe_log(level: str, message: str, ctx: Context = None):
     logger.log(level.upper(), message)
 
     # Also send to MCP if context is available
-    if ctx:
+    if ctx and os.getenv('MCP_MODE') == '1' and not _stderr_redirected:
         try:
             import asyncio
             loop = asyncio.get_event_loop()
@@ -125,8 +247,11 @@ def safe_log(level: str, message: str, ctx: Context = None):
         except Exception:
             pass  # Ignore MCP logging errors
 
-logger.info(f"Starting Futu MCP Server with log directory: {log_dir}")
-logger.info("Logging configured for MCP compatibility - stdout reserved for JSON communication")
+# Only log to file, never to stdout/stderr in MCP mode
+# These logs will only be written to file, not to stdout/stderr
+
+# Get project root directory
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # PID file path
 PID_FILE = os.path.join(project_root, '.futu_mcp.pid')
@@ -429,9 +554,103 @@ def init_trade_connection():
         _is_trade_initialized = False
         return False
 
-def init_futu_connection():
-    """Initialize both quote and trade connections"""
-    return init_quote_connection()
+def init_futu_connection() -> bool:
+    """
+    Initialize connection to Futu OpenD.
+    Returns True if successful, False otherwise.
+    """
+    global quote_ctx, trade_ctx, _is_trade_initialized
+
+    try:
+        # Get connection parameters from environment
+        host = os.getenv('FUTU_HOST', '127.0.0.1')
+        port = int(os.getenv('FUTU_PORT', '11111'))
+
+        # Log to file only
+        logger.info(f"Initializing Futu connection to {host}:{port}")
+
+        # Temporarily redirect stderr to capture any futu library output
+        original_stderr = None
+        futu_log_file = None
+        futu_log_fd = None
+
+        if os.getenv('MCP_MODE') == '1' and _stderr_redirected:
+            try:
+                # Create a special log file for futu connection logs
+                home_dir = os.path.expanduser("~")
+                log_dir = os.path.join(home_dir, "logs")
+                os.makedirs(log_dir, exist_ok=True)
+                futu_log_file = os.path.join(log_dir, "futu_connection.log")
+
+                # Save current stderr (should be devnull)
+                original_stderr = sys.stderr
+
+                # Redirect stderr to futu log file temporarily
+                futu_log_fd = open(futu_log_file, 'a')
+                sys.stderr = futu_log_fd
+            except Exception as e:
+                logger.debug(f"Could not redirect stderr for futu connection: {e}")
+
+        try:
+            # Initialize quote context
+            quote_ctx = OpenQuoteContext(host=host, port=port)
+
+            # Initialize trade context if needed
+            if os.getenv('FUTU_ENABLE_TRADING', '0') == '1':
+                # Get trading parameters
+                trade_env = os.getenv('FUTU_TRADE_ENV', 'SIMULATE')
+                security_firm = os.getenv('FUTU_SECURITY_FIRM', 'FUTUSECURITIES')
+                trd_market = os.getenv('FUTU_TRD_MARKET', 'HK')
+
+                # Map environment strings to Futu enums
+                trade_env_enum = {
+                    'REAL': TrdMarket.REAL,
+                    'SIMULATE': TrdMarket.SIMULATE
+                }.get(trade_env, TrdMarket.SIMULATE)
+
+                security_firm_enum = {
+                    'FUTUSECURITIES': SecurityFirm.FUTUSECURITIES,
+                    'FUTUINC': SecurityFirm.FUTUINC
+                }.get(security_firm, SecurityFirm.FUTUSECURITIES)
+
+                trd_market_enum = {
+                    'HK': TrdMarket.HK,
+                    'US': TrdMarket.US,
+                    'CN': TrdMarket.CN,
+                    'HKCC': TrdMarket.HKCC,
+                    'AU': TrdMarket.AU
+                }.get(trd_market, TrdMarket.HK)
+
+                # Initialize trade context
+                trade_ctx = OpenSecTradeContext(
+                    host=host,
+                    port=port,
+                    security_firm=security_firm_enum
+                )
+                _is_trade_initialized = True
+                logger.info("Trade context initialized successfully")
+
+            logger.info("Futu connection initialized successfully")
+            return True
+
+        finally:
+            # Restore stderr redirection
+            if futu_log_fd:
+                try:
+                    futu_log_fd.close()
+                except:
+                    pass
+                # Restore original stderr (should be devnull)
+                if original_stderr:
+                    sys.stderr = original_stderr
+
+    except Exception as e:
+        error_msg = f"Failed to initialize Futu connection: {str(e)}"
+        logger.error(error_msg)
+        # Make sure we restore stderr even in case of errors
+        if _stderr_redirected and _stderr_backup:
+            sys.stderr = _stderr_backup
+        return False
 
 @asynccontextmanager
 async def lifespan(server: Server):
@@ -1554,6 +1773,34 @@ async def get_current_time() -> Dict[str, Any]:
 
 def main():
     """Main entry point for the futu-mcp-server command."""
+    # Parse command line arguments first
+    parser = argparse.ArgumentParser(
+        description="Futu Stock MCP Server - A Model Context Protocol server for accessing Futu OpenAPI functionality",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  futu-mcp-server                    # Start the MCP server
+  futu-mcp-server --help            # Show this help message
+
+Environment Variables:
+  FUTU_HOST                         # Futu OpenD host (default: 127.0.0.1)
+  FUTU_PORT                         # Futu OpenD port (default: 11111)
+  FUTU_ENABLE_TRADING               # Enable trading features (default: 0)
+  FUTU_TRADE_ENV                    # Trading environment: SIMULATE or REAL (default: SIMULATE)
+  FUTU_SECURITY_FIRM                # Security firm: FUTUSECURITIES or FUTUINC (default: FUTUSECURITIES)
+  FUTU_TRD_MARKET                   # Trading market: HK or US (default: HK)
+  FUTU_DEBUG_MODE                   # Enable debug logging (default: 0)
+        """
+    )
+    
+    parser.add_argument(
+        '--version', 
+        action='version', 
+        version='futu-stock-mcp-server 0.1.3'
+    )
+    
+    args = parser.parse_args()
+    
     try:
         # CRITICAL: Set MCP mode BEFORE any logging to ensure clean stdout
         os.environ['MCP_MODE'] = '1'
@@ -1564,19 +1811,14 @@ def main():
         os.environ['FORCE_COLOR'] = '0'
         os.environ['COLORTERM'] = ''
         os.environ['ANSI_COLORS_DISABLED'] = '1'
-
-        # Disable Python buffering to ensure clean MCP JSON communication
         os.environ['PYTHONUNBUFFERED'] = '1'
         os.environ['PYTHONIOENCODING'] = 'utf-8'
 
-        # According to MCP best practices:
-        # - stdout is RESERVED for MCP JSON communication only
-        # - All logging should go to files
-        # - No stderr output in production mode to avoid pollution
+        # Disable Python buffering to ensure clean MCP JSON communication
 
         # Clean up stale processes and acquire lock
         cleanup_stale_processes()
-        
+
         lock_fd = acquire_lock()
         if lock_fd is None:
             # Use file logging only - no stderr output in MCP mode
@@ -1609,6 +1851,8 @@ def main():
             os._exit(1)
 
     except Exception as e:
+        # In MCP mode, we should avoid printing to stdout
+        # Log to file only
         logger.error(f"Error starting MCP server: {str(e)}")
         sys.exit(1)
     finally:
@@ -1616,3 +1860,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

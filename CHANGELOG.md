@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.1.3] - 2025-01-02
+## [0.1.4] - 2025-01-02
 
 ### Enhanced
 - **MCP-Compatible Logging System**: Completely refactored logging to follow MCP official best practices
