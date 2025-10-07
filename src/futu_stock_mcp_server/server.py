@@ -51,23 +51,29 @@ class StdoutProtector:
     def flush(self):
         self.original.flush()
 
+    def readable(self):
+        """Delegate readable() method to original stdout"""
+        return getattr(self.original, 'readable', lambda: False)()
+
+    def writable(self):
+        """Delegate writable() method to original stdout"""
+        return getattr(self.original, 'writable', lambda: True)()
+
+    def seekable(self):
+        """Delegate seekable() method to original stdout"""
+        return getattr(self.original, 'seekable', lambda: False)()
+
     def __getattr__(self, name):
         return getattr(self.original, name)
 
 # Apply stdout protection in MCP mode VERY EARLY, before any imports
 if os.getenv('MCP_MODE') == '1':
-    sys.stdout = StdoutProtector(sys.stdout)
+    # sys.stdout = StdoutProtector(sys.stdout)
 
-# 5. Redirect stderr to null in MCP mode to prevent any accidental output
+# 5. Don't redirect stderr in MCP mode - let it work normally
+# MCP servers can use stderr for logging, only stdout needs protection
 _stderr_redirected = False
 _stderr_backup = None
-if os.getenv('MCP_MODE') == '1':
-    # Save original stderr for emergency use
-    _stderr_backup = sys.stderr
-    # Redirect stderr to devnull
-    devnull = open(os.devnull, 'w')
-    sys.stderr = devnull
-    _stderr_redirected = True
 
 # Now we can safely import other modules
 from contextlib import asynccontextmanager
@@ -263,6 +269,8 @@ trade_ctx = None
 lock_fd = None
 _is_shutting_down = False
 _is_trade_initialized = False
+_futu_host = '127.0.0.1'
+_futu_port = 11111
 
 def is_process_running(pid):
     """Check if a process with given PID is running"""
@@ -436,14 +444,14 @@ def acquire_lock():
 
 def init_quote_connection():
     """Initialize quote connection only"""
-    global quote_ctx
+    global quote_ctx, _futu_host, _futu_port
     
     try:
         # Check if OpenD is running by attempting to get global state
         try:
             temp_ctx = OpenQuoteContext(
-                host=os.getenv('FUTU_HOST', '127.0.0.1'),
-                port=int(os.getenv('FUTU_PORT', '11111'))
+                host=_futu_host,
+                port=_futu_port
             )
             ret, _ = temp_ctx.get_global_state()
             temp_ctx.close()
@@ -456,8 +464,8 @@ def init_quote_connection():
 
         # Initialize Futu connection
         quote_ctx = OpenQuoteContext(
-            host=os.getenv('FUTU_HOST', '127.0.0.1'),
-            port=int(os.getenv('FUTU_PORT', '11111'))
+            host=_futu_host,
+            port=_futu_port
         )
         logger.info("Successfully connected to Futu Quote API")
         return True
@@ -469,7 +477,7 @@ def init_quote_connection():
 
 def init_trade_connection():
     """Initialize trade connection only"""
-    global trade_ctx, _is_trade_initialized
+    global trade_ctx, _is_trade_initialized, _futu_host, _futu_port
     
     if _is_trade_initialized and trade_ctx:
         return True
@@ -489,8 +497,8 @@ def init_trade_connection():
         # 创建交易上下文
         trade_ctx = OpenSecTradeContext(
             filter_trdmarket=trd_market,
-            host=os.getenv('FUTU_HOST', '127.0.0.1'),
-            port=int(os.getenv('FUTU_PORT', '11111')),
+            host=_futu_host,
+            port=_futu_port,
             security_firm=security_firm
         )
             
@@ -554,17 +562,22 @@ def init_trade_connection():
         _is_trade_initialized = False
         return False
 
-def init_futu_connection() -> bool:
+def init_futu_connection(host: str = '127.0.0.1', port: int = 11111) -> bool:
     """
     Initialize connection to Futu OpenD.
+
+    Args:
+        host: Futu OpenD host address
+        port: Futu OpenD port number
+
     Returns True if successful, False otherwise.
     """
-    global quote_ctx, trade_ctx, _is_trade_initialized
+    global quote_ctx, trade_ctx, _is_trade_initialized, _futu_host, _futu_port
 
     try:
-        # Get connection parameters from environment
-        host = os.getenv('FUTU_HOST', '127.0.0.1')
-        port = int(os.getenv('FUTU_PORT', '11111'))
+        # Set global connection parameters
+        _futu_host = host
+        _futu_port = port
 
         # Log to file only
         logger.info(f"Initializing Futu connection to {host}:{port}")
@@ -617,10 +630,8 @@ def init_futu_connection() -> bool:
 
 @asynccontextmanager
 async def lifespan(server: Server):
-    # Startup - only initialize quote connection
-    if not init_quote_connection():
-        logger.error("Failed to initialize quote connection")
-        raise Exception("Quote connection failed")
+    # Startup - connections are already initialized in main()
+    # No need to initialize here as it's done before mcp.run()
     try:
         yield
     finally:
@@ -1742,12 +1753,15 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  futu-mcp-server                    # Start the MCP server
-  futu-mcp-server --help            # Show this help message
+  futu-mcp-server                                    # Start the MCP server with default settings
+  futu-mcp-server --host 192.168.1.100 --port 11111 # Connect to remote OpenD
+  futu-mcp-server --help                            # Show this help message
+
+Arguments:
+  --host                            # Futu OpenD host (default: 127.0.0.1)
+  --port                            # Futu OpenD port (default: 11111)
 
 Environment Variables:
-  FUTU_HOST                         # Futu OpenD host (default: 127.0.0.1)
-  FUTU_PORT                         # Futu OpenD port (default: 11111)
   FUTU_ENABLE_TRADING               # Enable trading features (default: 0)
   FUTU_TRADE_ENV                    # Trading environment: SIMULATE or REAL (default: SIMULATE)
   FUTU_SECURITY_FIRM                # Security firm: FUTUSECURITIES or FUTUINC (default: FUTUSECURITIES)
@@ -1756,6 +1770,19 @@ Environment Variables:
         """
     )
     
+    parser.add_argument(
+        '--host',
+        default='127.0.0.1',
+        help='Futu OpenD host address (default: 127.0.0.1)'
+    )
+
+    parser.add_argument(
+        '--port',
+        type=int,
+        default=11111,
+        help='Futu OpenD port number (default: 11111)'
+    )
+
     parser.add_argument(
         '--version', 
         action='version', 
@@ -1794,13 +1821,15 @@ Environment Variables:
             
         # Initialize Futu connection with file logging only
         logger.info("Initializing Futu connection for MCP server...")
-        if init_futu_connection():
+        if init_futu_connection(args.host, args.port):
             logger.info("Successfully initialized Futu connection")
             logger.info("Starting MCP server in stdio mode - stdout reserved for JSON communication")
 
             try:
                 # Run MCP server - stdout will be used for JSON communication only
-                mcp.run(transport='stdio')
+                logger.info("About to call mcp.run() without transport parameter")
+                mcp.run()
+                logger.info("mcp.run() completed successfully")
             except KeyboardInterrupt:
                 logger.info("Received keyboard interrupt, shutting down gracefully...")
                 cleanup_all()
