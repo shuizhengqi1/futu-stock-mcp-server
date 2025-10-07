@@ -569,87 +569,50 @@ def init_futu_connection() -> bool:
         # Log to file only
         logger.info(f"Initializing Futu connection to {host}:{port}")
 
-        # Temporarily redirect stderr to capture any futu library output
-        original_stderr = None
-        futu_log_file = None
-        futu_log_fd = None
+        # Initialize quote context
+        quote_ctx = OpenQuoteContext(host=host, port=port)
 
-        if os.getenv('MCP_MODE') == '1' and _stderr_redirected:
-            try:
-                # Create a special log file for futu connection logs
-                home_dir = os.path.expanduser("~")
-                log_dir = os.path.join(home_dir, "logs")
-                os.makedirs(log_dir, exist_ok=True)
-                futu_log_file = os.path.join(log_dir, "futu_connection.log")
+        # Initialize trade context if needed
+        if os.getenv('FUTU_ENABLE_TRADING', '0') == '1':
+            # Get trading parameters
+            trade_env = os.getenv('FUTU_TRADE_ENV', 'SIMULATE')
+            security_firm = os.getenv('FUTU_SECURITY_FIRM', 'FUTUSECURITIES')
+            trd_market = os.getenv('FUTU_TRD_MARKET', 'HK')
 
-                # Save current stderr (should be devnull)
-                original_stderr = sys.stderr
+            # Map environment strings to Futu enums
+            trade_env_enum = {
+                'REAL': TrdMarket.REAL,
+                'SIMULATE': TrdMarket.SIMULATE
+            }.get(trade_env, TrdMarket.SIMULATE)
 
-                # Redirect stderr to futu log file temporarily
-                futu_log_fd = open(futu_log_file, 'a')
-                sys.stderr = futu_log_fd
-            except Exception as e:
-                logger.debug(f"Could not redirect stderr for futu connection: {e}")
+            security_firm_enum = {
+                'FUTUSECURITIES': SecurityFirm.FUTUSECURITIES,
+                'FUTUINC': SecurityFirm.FUTUINC
+            }.get(security_firm, SecurityFirm.FUTUSECURITIES)
 
-        try:
-            # Initialize quote context
-            quote_ctx = OpenQuoteContext(host=host, port=port)
+            trd_market_enum = {
+                'HK': TrdMarket.HK,
+                'US': TrdMarket.US,
+                'CN': TrdMarket.CN,
+                'HKCC': TrdMarket.HKCC,
+                'AU': TrdMarket.AU
+            }.get(trd_market, TrdMarket.HK)
 
-            # Initialize trade context if needed
-            if os.getenv('FUTU_ENABLE_TRADING', '0') == '1':
-                # Get trading parameters
-                trade_env = os.getenv('FUTU_TRADE_ENV', 'SIMULATE')
-                security_firm = os.getenv('FUTU_SECURITY_FIRM', 'FUTUSECURITIES')
-                trd_market = os.getenv('FUTU_TRD_MARKET', 'HK')
+            # Initialize trade context
+            trade_ctx = OpenSecTradeContext(
+                host=host,
+                port=port,
+                security_firm=security_firm_enum
+            )
+            _is_trade_initialized = True
+            logger.info("Trade context initialized successfully")
 
-                # Map environment strings to Futu enums
-                trade_env_enum = {
-                    'REAL': TrdMarket.REAL,
-                    'SIMULATE': TrdMarket.SIMULATE
-                }.get(trade_env, TrdMarket.SIMULATE)
-
-                security_firm_enum = {
-                    'FUTUSECURITIES': SecurityFirm.FUTUSECURITIES,
-                    'FUTUINC': SecurityFirm.FUTUINC
-                }.get(security_firm, SecurityFirm.FUTUSECURITIES)
-
-                trd_market_enum = {
-                    'HK': TrdMarket.HK,
-                    'US': TrdMarket.US,
-                    'CN': TrdMarket.CN,
-                    'HKCC': TrdMarket.HKCC,
-                    'AU': TrdMarket.AU
-                }.get(trd_market, TrdMarket.HK)
-
-                # Initialize trade context
-                trade_ctx = OpenSecTradeContext(
-                    host=host,
-                    port=port,
-                    security_firm=security_firm_enum
-                )
-                _is_trade_initialized = True
-                logger.info("Trade context initialized successfully")
-
-            logger.info("Futu connection initialized successfully")
-            return True
-
-        finally:
-            # Restore stderr redirection
-            if futu_log_fd:
-                try:
-                    futu_log_fd.close()
-                except:
-                    pass
-                # Restore original stderr (should be devnull)
-                if original_stderr:
-                    sys.stderr = original_stderr
+        logger.info("Futu connection initialized successfully")
+        return True
 
     except Exception as e:
         error_msg = f"Failed to initialize Futu connection: {str(e)}"
         logger.error(error_msg)
-        # Make sure we restore stderr even in case of errors
-        if _stderr_redirected and _stderr_backup:
-            sys.stderr = _stderr_backup
         return False
 
 @asynccontextmanager
