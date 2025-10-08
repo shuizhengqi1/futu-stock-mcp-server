@@ -19,7 +19,7 @@ if not command -v uv >/dev/null 2>&1
     exit 1
 end
 
-if not command -v python >/dev/null 2>&1
+if not command -v python3 >/dev/null 2>&1
     echo "❌ Python 未安装"
     exit 1
 end
