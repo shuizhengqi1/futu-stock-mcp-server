@@ -67,7 +67,7 @@ class StdoutProtector:
         return getattr(self.original, name)
 
 # Apply stdout protection in MCP mode VERY EARLY, before any imports
-if os.getenv('MCP_MODE') == '1':
+# if os.getenv('MCP_MODE') == '1':
     # sys.stdout = StdoutProtector(sys.stdout)
 
 # 5. Don't redirect stderr in MCP mode - let it work normally
