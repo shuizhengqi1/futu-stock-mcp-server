@@ -2722,7 +2722,7 @@ Environment Variables:
     parser.add_argument(
         '--version', 
         action='version', 
-        version='futu-stock-mcp-server 1.0.5'
+        version='futu-stock-mcp-server 1.0.6'
     )
     
     args = parser.parse_args()
