@@ -2475,6 +2475,191 @@ async def get_stock_filter(base_filters: List[Dict[str, Any]] = None,
     return data.to_dict() if ret == RET_OK else {'error': data}
 
 @mcp.tool()
+async def get_warrant(
+    stock_owner: str = '',
+    warrant_types: Optional[List[str]] = None,
+    issuers: Optional[List[str]] = None,
+    sort_field: str = 'CUR_PRICE',
+    ascend: bool = True,
+    begin: int = 0,
+    num: int = 200,
+    maturity_time_min: Optional[str] = None,
+    maturity_time_max: Optional[str] = None,
+    price_type: Optional[str] = None,
+    status: Optional[str] = None,
+    cur_price_min: Optional[float] = None,
+    cur_price_max: Optional[float] = None,
+    strike_price_min: Optional[float] = None,
+    strike_price_max: Optional[float] = None,
+    recovery_price_min: Optional[float] = None,
+    recovery_price_max: Optional[float] = None,
+    price_recovery_ratio_min: Optional[float] = None,
+    price_recovery_ratio_max: Optional[float] = None,
+    leverage_ratio_min: Optional[float] = None,
+    leverage_ratio_max: Optional[float] = None,
+    premium_min: Optional[float] = None,
+    premium_max: Optional[float] = None,
+    delta_min: Optional[float] = None,
+    delta_max: Optional[float] = None,
+    implied_min: Optional[float] = None,
+    implied_max: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Get warrant/CBBC (Callable Bull/Bear Contracts) list with filters
+
+    Args:
+        stock_owner: Underlying stock code, e.g. "HK.00700". Empty means all warrants.
+        warrant_types: List of warrant types to filter. Options:
+            - "CALL": Call warrant (认购证)
+            - "PUT": Put warrant (认沽证)
+            - "BULL": Bull contract (牛证)
+            - "BEAR": Bear contract (熊证)
+            - "INLINE": Inline warrant (界内证)
+        issuers: List of issuer codes to filter, e.g. ["GS", "JP", "MS"].
+            Common issuers: GS(Goldman Sachs), JP(JPMorgan), MS(Morgan Stanley),
+            HS(HSBC), CS(Credit Suisse), CT(Citi), MB(Macquarie), DB(Deutsche Bank)
+        sort_field: Field to sort by (default: "CUR_PRICE"). Options:
+            CODE, CUR_PRICE, CHANGE_RATE, VOLUME, TURNOVER, PREMIUM,
+            EFFECTIVE_LEVERAGE, DELTA, IMPLIED_VOLATILITY, STRIKE_PRICE,
+            MATURITY_TIME, LEVERAGE, RECOVERY_PRICE, STREET_RATE, AMPLITUDE
+        ascend: Sort ascending (True) or descending (False). Default: True
+        begin: Data start index for pagination (default: 0)
+        num: Number of results to return, max 200 (default: 200)
+        maturity_time_min: Maturity date range start, format "YYYY-MM-DD"
+        maturity_time_max: Maturity date range end, format "YYYY-MM-DD"
+        price_type: Price type filter. Options:
+            - "WITH_IN": In the money (价内)
+            - "OUTSIDE": Out of the money (价外)
+        status: Warrant status filter. Options:
+            - "NORMAL": Normal trading (正常)
+            - "SUSPEND": Suspended (停牌)
+            - "STOP_TRADE": Stop trade (停止交易)
+            - "PENDING_LISTING": Pending listing (待上市)
+        cur_price_min: Current price minimum filter
+        cur_price_max: Current price maximum filter
+        strike_price_min: Strike price minimum filter
+        strike_price_max: Strike price maximum filter
+        recovery_price_min: Recovery price minimum filter (CBBC only, 牛熊证)
+        recovery_price_max: Recovery price maximum filter (CBBC only, 牛熊证)
+        price_recovery_ratio_min: Distance from recovery price % minimum (CBBC only)
+        price_recovery_ratio_max: Distance from recovery price % maximum (CBBC only)
+        leverage_ratio_min: Leverage ratio minimum filter
+        leverage_ratio_max: Leverage ratio maximum filter
+        premium_min: Premium % minimum filter
+        premium_max: Premium % maximum filter
+        delta_min: Delta minimum filter (call/put warrants only)
+        delta_max: Delta maximum filter (call/put warrants only)
+        implied_min: Implied volatility minimum filter (call/put warrants only)
+        implied_max: Implied volatility maximum filter (call/put warrants only)
+
+    Returns:
+        Dict containing warrant list with fields:
+        - stock_code: Warrant code
+        - stock_name: Warrant name
+        - wrt_type: Warrant type (CALL/PUT/BULL/BEAR/INLINE)
+        - issuer_code: Issuer code
+        - maturity_time: Maturity date
+        - list_time: Listing date
+        - last_trade_time: Last trading date
+        - recovery_price: Recovery price (CBBC only)
+        - conversion_ratio: Conversion ratio
+        - strike_price: Strike price
+        - cur_price: Current price
+        - price_change_val: Price change value
+        - change_rate: Change rate %
+        - volume: Trading volume
+        - turnover: Turnover
+        - premium: Premium %
+        - leverage: Leverage ratio
+        - effective_leverage: Effective leverage
+        - delta: Delta (call/put only)
+        - implied_volatility: Implied volatility (call/put only)
+        - street_rate: Street rate %
+        - break_even_point: Break even point
+        - in_out_money: In/out of money status
+
+    Note:
+        - recovery_price_min/max and price_recovery_ratio_min/max only work for BULL/BEAR types
+        - delta_min/max and implied_min/max only work for CALL/PUT types
+        - Use stock_owner to find all warrants linked to a specific underlying stock
+        - CBBC (牛熊证) includes BULL and BEAR types; warrants (窝轮) include CALL and PUT types
+    """
+    from futu.quote.quote_get_warrant import Request as WarrantRequest
+    from futu.common.utils import WrtType, Issuer, SortField, PriceType, WarrantStatus
+
+    req = WarrantRequest()
+    req.begin = begin
+    req.num = min(num, 200)
+    req.ascend = ascend
+
+    if stock_owner:
+        req.stock_owner = stock_owner
+
+    # Sort field
+    r, v = SortField.to_number(sort_field)
+    if r:
+        req.sort_field = sort_field
+
+    # Warrant types
+    if warrant_types:
+        req.type_list = warrant_types
+
+    # Issuers
+    if issuers:
+        req.issuer_list = issuers
+
+    # Date range
+    if maturity_time_min:
+        req.maturity_time_min = maturity_time_min
+    if maturity_time_max:
+        req.maturity_time_max = maturity_time_max
+
+    # Price type
+    if price_type:
+        req.price_type = price_type
+
+    # Status
+    if status:
+        req.status = status
+
+    # Numeric range filters
+    if cur_price_min is not None:
+        req.cur_price_min = cur_price_min
+    if cur_price_max is not None:
+        req.cur_price_max = cur_price_max
+    if strike_price_min is not None:
+        req.strike_price_min = strike_price_min
+    if strike_price_max is not None:
+        req.strike_price_max = strike_price_max
+    if recovery_price_min is not None:
+        req.recovery_price_min = recovery_price_min
+    if recovery_price_max is not None:
+        req.recovery_price_max = recovery_price_max
+    if price_recovery_ratio_min is not None:
+        req.price_recovery_ratio_min = price_recovery_ratio_min
+    if price_recovery_ratio_max is not None:
+        req.price_recovery_ratio_max = price_recovery_ratio_max
+    if leverage_ratio_min is not None:
+        req.leverage_ratio_min = leverage_ratio_min
+    if leverage_ratio_max is not None:
+        req.leverage_ratio_max = leverage_ratio_max
+    if premium_min is not None:
+        req.premium_min = premium_min
+    if premium_max is not None:
+        req.premium_max = premium_max
+    if delta_min is not None:
+        req.delta_min = delta_min
+    if delta_max is not None:
+        req.delta_max = delta_max
+    if implied_min is not None:
+        req.implied_min = implied_min
+    if implied_max is not None:
+        req.implied_max = implied_max
+
+    ret, data = quote_ctx.get_warrant(stock_owner=stock_owner, req=req)
+    return dataframe_to_records(data, 'warrant_list') if ret == RET_OK else {'error': data}
+
+
+@mcp.tool()
 async def get_current_time() -> Dict[str, Any]:
     """Get current time information
     
