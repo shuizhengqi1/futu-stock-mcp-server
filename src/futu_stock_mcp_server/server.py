@@ -703,10 +703,43 @@ def get_trade_env_value(trd_env: Optional[str]) -> Any:
     return parse_enum_value(TrdEnv, resolved, "trd_env")
 
 
+def _sanitize_record(record: dict) -> dict:
+    """将 pandas 特殊类型（Timestamp、NaN、NaT）转换为 JSON 兼容的 Python 原生类型。"""
+    import math
+    result = {}
+    for k, v in record.items():
+        # pandas Timestamp -> str
+        if hasattr(v, 'isoformat'):
+            result[k] = v.isoformat()
+        # float NaN / inf -> None
+        elif isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+            result[k] = None
+        # pandas NaT 等 (is None 检사 + str fallback)
+        elif v is None:
+            result[k] = None
+        else:
+            # 其他 pandas 标量（如 numpy int/float）转为 Python 原生类型
+            try:
+                import numpy as np
+                if isinstance(v, (np.integer,)):
+                    result[k] = int(v)
+                elif isinstance(v, (np.floating,)):
+                    result[k] = None if math.isnan(float(v)) else float(v)
+                elif isinstance(v, np.bool_):
+                    result[k] = bool(v)
+                else:
+                    result[k] = v
+            except ImportError:
+                result[k] = v
+    return result
+
+
 def dataframe_to_records(data: Any, wrapper_key: str) -> Dict[str, Any]:
     """Normalize pandas DataFrame-like responses to record list payload."""
     if hasattr(data, "to_dict"):
-        return {wrapper_key: data.to_dict("records")}
+        raw_records = data.to_dict("records")
+        sanitized = [_sanitize_record(r) for r in raw_records]
+        return {wrapper_key: sanitized}
     return {wrapper_key: data}
 
 # Market Data Tools
@@ -2656,7 +2689,14 @@ async def get_warrant(
         req.implied_max = implied_max
 
     ret, data = quote_ctx.get_warrant(stock_owner=stock_owner, req=req)
-    return dataframe_to_records(data, 'warrant_list') if ret == RET_OK else {'error': data}
+    if ret != RET_OK:
+        return {'error': data}
+    # data is (DataFrame, last_page, all_count)
+    df, last_page, all_count = data
+    result = dataframe_to_records(df, 'warrant_list')
+    result['last_page'] = last_page
+    result['all_count'] = all_count
+    return result
 
 
 @mcp.tool()
