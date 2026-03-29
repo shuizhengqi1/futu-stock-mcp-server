@@ -1,6 +1,6 @@
 [project]
 name = "futu-stock-mcp-server"
-version = "1.0.6"
+version = "1.0.7"
 description = "A Model Context Protocol (MCP) server for accessing Futu OpenAPI functionality"
 readme = "README.md"
 license = {text = "MIT"}
