@@ -675,6 +675,13 @@ def feature_disabled_error(feature: str, env_key: str) -> Dict[str, Any]:
     return {"error": f"{feature} is disabled. Set {env_key}=1 to enable."}
 
 
+def validate_kline_count(count: int) -> Optional[Dict[str, str]]:
+    """Validate Futu K-line request count."""
+    if count < 1 or count > 1000:
+        return {"error": "count must be between 1 and 1000"}
+    return None
+
+
 def parse_enum_value(enum_cls: Any, raw_value: Any, field_name: str) -> Any:
     """Convert user input into futu enum values, keeping protocol simple."""
     if raw_value is None:
@@ -936,6 +943,10 @@ async def get_cur_kline(symbol: str, ktype: str, count: int = 100) -> Dict[str, 
         - Consider actual needs when selecting stocks and K-line types
         - Handle exceptions properly
     """
+    count_error = validate_kline_count(count)
+    if count_error:
+        return count_error
+
     ret, data = quote_ctx.get_cur_kline(
         code=symbol,
         ktype=ktype,
@@ -979,10 +990,12 @@ async def get_history_kline(symbol: str, ktype: str, start: str, end: str, count
             - "K_MON": Monthly
         start: Start date in format "YYYY-MM-DD"
         end: End date in format "YYYY-MM-DD"
-        count: Number of K-lines to return (default: 100)
+        count: Number of K-lines to request per API page (default: 100)
             Range: 1-1000
     
     Note:
+        - The function follows page_req_key and returns all available K-lines
+          within the requested start/end range
         - Limited to 30 stocks per 30 days
         - Used quota will be automatically released after 30 days
         - Different K-line types have different update frequencies
@@ -1010,6 +1023,10 @@ async def get_history_kline(symbol: str, ktype: str, start: str, end: str, count
         - INVALID_SUBTYPE: Invalid K-line type
         - GET_HISTORY_KLINE_FAILED: Failed to get historical K-line data
     """
+    count_error = validate_kline_count(count)
+    if count_error:
+        return count_error
+
     ret, data, page_req_key = quote_ctx.request_history_kline(
         code=symbol,
         start=start,
