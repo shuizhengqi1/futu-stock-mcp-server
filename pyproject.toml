@@ -1,6 +1,6 @@
 [project]
 name = "futu-stock-mcp-server"
-version = "1.0.7"
+version = "1.0.8"
 description = "A Model Context Protocol (MCP) server for accessing Futu OpenAPI functionality"
 readme = "README.md"
 license = {text = "MIT"}
@@ -71,7 +71,7 @@ include = [
 
 [tool.ruff]
 line-length = 100
-target-version = "0.1.8"
+target-version = "1.0.8"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "B", "UP"]
