@@ -111,9 +111,13 @@ from mcp.server.session import ServerSession
 import atexit
 import signal
 import fcntl
+import math
 import psutil
 import time
-from datetime import datetime
+from datetime import date, datetime
+
+import numpy as np
+import pandas as pd
 
 # Get the user home directory and create logs directory there
 home_dir = os.path.expanduser("~")
@@ -2524,6 +2528,29 @@ async def get_stock_filter(base_filters: List[Dict[str, Any]] = None,
     ret, data = quote_ctx.get_stock_filter(req)
     return data.to_dict() if ret == RET_OK else {'error': data}
 
+
+def _warrant_json_value(value: Any) -> Any:
+    """将 SDK 窝轮数据的标量转换成 JSON 值。"""
+    if value is None or value is pd.NA or value is pd.NaT:
+        return None
+    if isinstance(value, np.datetime64):
+        return None if np.isnat(value) else str(np.datetime_as_string(value))
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, np.bool_):
+        return bool(value)
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, (float, np.floating)):
+        number = float(value)
+        return number if math.isfinite(number) else None
+    if isinstance(value, str):
+        return str(value)
+    if isinstance(value, int):
+        return value
+    raise TypeError(f"Unsupported get_warrant scalar: {type(value).__name__}")
+
+
 @mcp.tool()
 async def get_warrant(
     stock_owner: str = '',
@@ -2602,11 +2629,17 @@ async def get_warrant(
         implied_max: Implied volatility maximum filter (call/put warrants only)
 
     Returns:
-        Dict containing warrant list with fields:
-        - stock_code: Warrant code
-        - stock_name: Warrant name
-        - wrt_type: Warrant type (CALL/PUT/BULL/BEAR/INLINE)
-        - issuer_code: Issuer code
+        Dict containing warrant_list (one record per SDK row), last_page (whether
+        this is the final page), and all_count (total matching warrants).
+        Empty pages have an empty list. Missing values are null, and date
+        objects use ISO 8601. Existing SDK date strings keep their format.
+        An SDK error is returned as an error message in the error field.
+        SDK record fields include:
+        - stock: Warrant code
+        - name: Warrant name
+        - stock_owner: Underlying stock code
+        - type: Warrant type (CALL/PUT/BULL/BEAR/INLINE)
+        - issuer: Issuer code
         - maturity_time: Maturity date
         - list_time: Listing date
         - last_trade_time: Last trading date
@@ -2625,7 +2658,6 @@ async def get_warrant(
         - implied_volatility: Implied volatility (call/put only)
         - street_rate: Street rate %
         - break_even_point: Break even point
-        - in_out_money: In/out of money status
 
     Note:
         - recovery_price_min/max and price_recovery_ratio_min/max only work for BULL/BEAR types
@@ -2707,13 +2739,17 @@ async def get_warrant(
 
     ret, data = quote_ctx.get_warrant(stock_owner=stock_owner, req=req)
     if ret != RET_OK:
-        return {'error': data}
-    # data is (DataFrame, last_page, all_count)
+        return {'error': str(data)}
+
     df, last_page, all_count = data
-    result = dataframe_to_records(df, 'warrant_list')
-    result['last_page'] = last_page
-    result['all_count'] = all_count
-    return result
+    return {
+        'warrant_list': [
+            {field: _warrant_json_value(value) for field, value in row.items()}
+            for row in df.to_dict('records')
+        ],
+        'last_page': _warrant_json_value(last_page),
+        'all_count': _warrant_json_value(all_count),
+    }
 
 
 @mcp.tool()
