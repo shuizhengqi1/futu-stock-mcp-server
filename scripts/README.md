@@ -34,7 +34,20 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ### 2. 配置 PyPI 认证
 
+在 PyPI 的 **Account settings → API tokens** 创建项目范围的 token，Scope 选择 `futu-stock-mcp-server`。token 以 `pypi-` 开头。
+
 #### 方法 1: 环境变量 (推荐)
+
+Fish 中可隐藏输入，脚本会自动设置 Twine 用户名：
+
+```fish
+read --silent --export --prompt-str 'PyPI API token: ' TWINE_PASSWORD
+./scripts/publish.fish
+set --erase TWINE_PASSWORD
+```
+
+Bash 脚本使用下列环境变量：
+
 ```bash
 export TWINE_USERNAME=__token__
 export TWINE_PASSWORD=pypi-your-api-token-here
@@ -90,11 +103,8 @@ python --version
 ```
 
 ### 问题 3: PyPI 认证失败
-```bash
-# 检查 token 是否正确设置
-echo $TWINE_PASSWORD
-# 或检查 ~/.pypirc 文件
-```
+
+如果通过环境变量提供 token，可用 `test -n "$TWINE_PASSWORD"` 检查是否已设置。若使用 `~/.pypirc`，请在本机检查 `[pypi]` 的配置。若 PyPI 拒绝上传，请确认 token 有效且有权发布 `futu-stock-mcp-server`。
 
 ### 问题 4: 包已存在
 如果版本号已经发布过，需要：
